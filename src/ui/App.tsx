@@ -2,6 +2,7 @@ import React from 'react'
 import { Home } from './Home'
 import { Settings } from './Settings'
 import { Nodes } from './Nodes'
+import { Mcp } from './Mcp'
 
 export default function App() {
   return (
@@ -10,6 +11,8 @@ export default function App() {
       <Home />
       <hr />
       <Nodes />
+      <hr />
+      <Mcp />
       <hr />
       <Settings />
     </div>

@@ -267,7 +267,59 @@ fn main() {
       upsert_node,
       delete_node,
       update_node_credential,
+      list_mcp_servers,
+      upsert_mcp_server,
+      delete_mcp_server,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+#[derive(Serialize, Deserialize)]
+struct McpServer {
+  name: String,
+  command: Option<String>,
+  args: Option<Vec<String>>,
+}
+
+#[tauri::command]
+fn list_mcp_servers() -> Result<Vec<McpServer>, String> {
+  let cfg = read_config_value()?;
+  let mut res = vec![];
+  if let Some(mcp) = cfg.get("mcp_servers").and_then(|v| v.as_object()) {
+    for (name, item) in mcp.iter() {
+      let command = item.get("command").and_then(|v| v.as_str()).map(|s| s.to_string());
+      let args = item.get("args").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
+      });
+      res.push(McpServer { name: name.clone(), command, args });
+    }
+  }
+  Ok(res)
+}
+
+#[tauri::command]
+fn upsert_mcp_server(name: String, command: String, args: Vec<String>) -> Result<(), String> {
+  let mut cfg = read_config_value()?;
+  let tbl = cfg.as_table_mut().ok_or_else(|| "invalid config root".to_string())?;
+  if !tbl.contains_key("mcp_servers") {
+    tbl.insert("mcp_servers".into(), TomlValue::Table(toml::map::Map::new()));
+  }
+  let mcp = tbl.get_mut("mcp_servers").and_then(|v| v.as_table_mut()).ok_or_else(|| "invalid mcp_servers".to_string())?;
+  let mut entry = toml::map::Map::new();
+  entry.insert("command".into(), TomlValue::String(command));
+  let args_t = TomlValue::Array(args.into_iter().map(|s| TomlValue::String(s)).collect());
+  entry.insert("args".into(), args_t);
+  mcp.insert(name, TomlValue::Table(entry));
+  write_config_value(&cfg)
+}
+
+#[tauri::command]
+fn delete_mcp_server(name: String) -> Result<(), String> {
+  let mut cfg = read_config_value()?;
+  let tbl = cfg.as_table_mut().ok_or_else(|| "invalid config root".to_string())?;
+  if let Some(mcp) = tbl.get_mut("mcp_servers").and_then(|v| v.as_table_mut()) {
+    mcp.remove(&name);
+  }
+  write_config_value(&cfg)
 }
