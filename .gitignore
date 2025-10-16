@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.DS_Store
+target/
+src-tauri/target/
+.vite/
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+*.log

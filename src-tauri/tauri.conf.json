@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Codex Mate",
+  "version": "0.1.0",
+  "identifier": "com.example.codexmate",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      { "title": "Codex Mate", "width": 1000, "height": 720 }
+    ]
+  }
+}
+
