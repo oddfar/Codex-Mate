@@ -249,6 +249,20 @@ fn delete_node(name: String, force: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn read_config_raw() -> Result<String, String> {
+  let cfg_path = codex_dir().join("config.toml");
+  fs::read_to_string(&cfg_path).map_err(|e| format!("read {} failed: {}", cfg_path.display(), e))
+}
+
+#[tauri::command]
+fn write_config_raw(content: String) -> Result<(), String> {
+  // validate TOML first
+  let _: TomlValue = toml::from_str(&content).map_err(|e| format!("TOML parse error: {}", e))?;
+  let cfg_path = codex_dir().join("config.toml");
+  atomic_write(&cfg_path, &content)
+}
+
+#[tauri::command]
 fn update_node_credential(name: String, openai_api_key: String) -> Result<(), String> {
   let mut map = read_credentials_value()?;
   map.insert(name.clone(), serde_json::json!({"OPENAI_API_KEY": openai_api_key}));
@@ -270,6 +284,8 @@ fn main() {
       list_mcp_servers,
       upsert_mcp_server,
       delete_mcp_server,
+      read_config_raw,
+      write_config_raw,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
