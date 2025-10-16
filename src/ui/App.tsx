@@ -1,26 +1,26 @@
-import React from 'react'
-import { Home } from './Home'
-import { Settings } from './Settings'
-import { Nodes } from './Nodes'
-import { Mcp } from './Mcp'
-import { ConfigEditor } from './ConfigEditor'
-import { Projects } from './Projects'
+import React, { useState } from 'react'
+import { Layout } from './components/Layout'
+import { Sidebar } from './components/Sidebar'
+import { MainContent } from './components/MainContent'
+import { menuConfig } from '../config/menuConfig'
 
 export default function App() {
+  const [activeMenu, setActiveMenu] = useState(menuConfig[0].id)
+
+  // 获取当前激活的菜单项
+  const currentMenuItem = menuConfig.find((item) => item.id === activeMenu) || menuConfig[0]
+  const CurrentComponent = currentMenuItem.component
+
   return (
-    <div style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 16 }}>
-      <h1>Codex Mate</h1>
-      <Home />
-      <hr />
-      <Nodes />
-      <hr />
-      <Mcp />
-      <hr />
-      <ConfigEditor />
-      <hr />
-      <Projects />
-      <hr />
-      <Settings />
-    </div>
+    <Layout>
+      <Sidebar
+        menuItems={menuConfig}
+        activeMenu={activeMenu}
+        onMenuChange={setActiveMenu}
+      />
+      <MainContent title={currentMenuItem.label}>
+        <CurrentComponent />
+      </MainContent>
+    </Layout>
   )
 }
