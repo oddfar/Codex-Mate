@@ -4,6 +4,7 @@ import { Settings } from './Settings'
 import { Nodes } from './Nodes'
 import { Mcp } from './Mcp'
 import { ConfigEditor } from './ConfigEditor'
+import { Projects } from './Projects'
 
 export default function App() {
   return (
@@ -16,6 +17,8 @@ export default function App() {
       <Mcp />
       <hr />
       <ConfigEditor />
+      <hr />
+      <Projects />
       <hr />
       <Settings />
     </div>

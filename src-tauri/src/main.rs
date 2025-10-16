@@ -286,6 +286,9 @@ fn main() {
       delete_mcp_server,
       read_config_raw,
       write_config_raw,
+      list_projects,
+      upsert_project,
+      delete_project,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
@@ -336,6 +339,45 @@ fn delete_mcp_server(name: String) -> Result<(), String> {
   let tbl = cfg.as_table_mut().ok_or_else(|| "invalid config root".to_string())?;
   if let Some(mcp) = tbl.get_mut("mcp_servers").and_then(|v| v.as_table_mut()) {
     mcp.remove(&name);
+  }
+  write_config_value(&cfg)
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProjectEntry { path: String, trust_level: String }
+
+#[tauri::command]
+fn list_projects() -> Result<Vec<ProjectEntry>, String> {
+  let cfg = read_config_value()?;
+  let mut res = vec![];
+  if let Some(projects) = cfg.get("projects").and_then(|v| v.as_object()) {
+    for (path, item) in projects.iter() {
+      let trust = item.get("trust_level").and_then(|v| v.as_str()).unwrap_or("").to_string();
+      res.push(ProjectEntry { path: path.clone(), trust_level: trust });
+    }
+  }
+  Ok(res)
+}
+
+#[tauri::command]
+fn upsert_project(path: String, trust_level: String) -> Result<(), String> {
+  let mut cfg = read_config_value()?;
+  let tbl = cfg.as_table_mut().ok_or_else(|| "invalid config root".to_string())?;
+  if !tbl.contains_key("projects") {
+    tbl.insert("projects".into(), TomlValue::Table(toml::map::Map::new()));
+  }
+  let projects = tbl.get_mut("projects").and_then(|v| v.as_table_mut()).ok_or_else(|| "invalid projects".to_string())?;
+  let mut entry = toml::map::Map::new();
+  entry.insert("trust_level".into(), TomlValue::String(trust_level));
+  projects.insert(path, TomlValue::Table(entry));
+  write_config_value(&cfg)
+}
+
+#[tauri::command]
+fn delete_project(path: String) -> Result<(), String> {
+  let mut cfg = read_config_value()?;
+  if let Some(projects) = cfg.as_table_mut().and_then(|t| t.get_mut("projects")).and_then(|v| v.as_table_mut()) {
+    projects.remove(&path);
   }
   write_config_value(&cfg)
 }
