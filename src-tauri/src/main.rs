@@ -131,9 +131,143 @@ fn switch_node(name: String) -> Result<(), String> {
   Ok(())
 }
 
+fn read_config_value() -> Result<TomlValue, String> {
+  let cfg_path = codex_dir().join("config.toml");
+  let cfg_str = fs::read_to_string(&cfg_path).map_err(|e| format!("read {} failed: {}", cfg_path.display(), e))?;
+  toml::from_str(&cfg_str).map_err(|e| format!("parse toml failed: {}", e))
+}
+
+fn write_config_value(v: &TomlValue) -> Result<(), String> {
+  let cfg_path = codex_dir().join("config.toml");
+  let out = toml::to_string_pretty(&v).map_err(|e| e.to_string())?;
+  atomic_write(&cfg_path, &out)
+}
+
+fn read_credentials_value() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+  let path = codex_dir().join("codex-mate").join("credentials.json");
+  if !path.exists() {
+    return Ok(serde_json::Map::new());
+  }
+  let content = fs::read_to_string(&path).map_err(|e| format!("read {} failed: {}", path.display(), e))?;
+  let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("parse json failed: {}", e))?;
+  Ok(v.as_object().cloned().unwrap_or_default())
+}
+
+fn write_credentials_value(map: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+  let path = codex_dir().join("codex-mate").join("credentials.json");
+  let s = serde_json::to_string_pretty(&serde_json::Value::Object(map.clone())).map_err(|e| e.to_string())?;
+  atomic_write(&path, &s)
+}
+
+#[tauri::command]
+fn upsert_node(name: String, provider_fields: serde_json::Value, credential: Option<String>) -> Result<(), String> {
+  let mut cfg = read_config_value()?;
+  let tbl = cfg.as_table_mut().ok_or_else(|| "invalid config root".to_string())?;
+  // ensure model_providers table exists
+  if !tbl.contains_key("model_providers") {
+    tbl.insert("model_providers".into(), TomlValue::Table(toml::map::Map::new()));
+  }
+  let mps = tbl.get_mut("model_providers").and_then(|v| v.as_table_mut()).ok_or_else(|| "invalid model_providers".to_string())?;
+
+  let mut provider_tbl = if let Some(existing) = mps.get(&name).and_then(|v| v.as_table()) {
+    existing.clone()
+  } else {
+    toml::map::Map::new()
+  };
+
+  // merge fields from provider_fields (JSON) into provider_tbl (TOML)
+  fn json_to_toml(v: &serde_json::Value) -> TomlValue {
+    match v {
+      serde_json::Value::Null => TomlValue::String(String::new()),
+      serde_json::Value::Bool(b) => TomlValue::Boolean(*b),
+      serde_json::Value::Number(n) => {
+        if let Some(i) = n.as_i64() { TomlValue::Integer(i) }
+        else if let Some(f) = n.as_f64() { TomlValue::Float(f) }
+        else { TomlValue::String(n.to_string()) }
+      }
+      serde_json::Value::String(s) => TomlValue::String(s.clone()),
+      serde_json::Value::Array(arr) => TomlValue::Array(arr.iter().map(json_to_toml).collect()),
+      serde_json::Value::Object(obj) => {
+        let mut m = toml::map::Map::new();
+        for (k, v) in obj.iter() { m.insert(k.clone(), json_to_toml(v)); }
+        TomlValue::Table(m)
+      }
+    }
+  }
+
+  if let Some(obj) = provider_fields.as_object() {
+    for (k, v) in obj {
+      provider_tbl.insert(k.clone(), json_to_toml(v));
+    }
+  }
+
+  // enforce required fields
+  provider_tbl.insert("name".into(), TomlValue::String(name.clone()));
+  if !provider_tbl.contains_key("wire_api") {
+    provider_tbl.insert("wire_api".into(), TomlValue::String("responses".into()));
+  }
+
+  // ensure base_url exists when creating new
+  if !mps.contains_key(&name) {
+    if !provider_tbl.contains_key("base_url") {
+      return Err("base_url is required for new provider".into());
+    }
+  }
+
+  mps.insert(name.clone(), TomlValue::Table(provider_tbl));
+  write_config_value(&cfg)?;
+
+  if let Some(key) = credential {
+    let mut map = read_credentials_value()?;
+    map.insert(name.clone(), serde_json::json!({"OPENAI_API_KEY": key}));
+    write_credentials_value(&map)?;
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+fn delete_node(name: String, force: bool) -> Result<(), String> {
+  let mut cfg = read_config_value()?;
+  let current = cfg.get("model_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+  if !force {
+    if let Some(cur) = current {
+      if cur == name { return Err("cannot delete active provider without force".into()); }
+    }
+  }
+
+  let tbl = cfg.as_table_mut().ok_or_else(|| "invalid config root".to_string())?;
+  if let Some(mps) = tbl.get_mut("model_providers").and_then(|v| v.as_table_mut()) {
+    mps.remove(&name);
+  }
+  write_config_value(&cfg)?;
+
+  let mut map = read_credentials_value()?;
+  map.remove(&name);
+  write_credentials_value(&map)?;
+  Ok(())
+}
+
+#[tauri::command]
+fn update_node_credential(name: String, openai_api_key: String) -> Result<(), String> {
+  let mut map = read_credentials_value()?;
+  map.insert(name.clone(), serde_json::json!({"OPENAI_API_KEY": openai_api_key}));
+  write_credentials_value(&map)?;
+  Ok(())
+}
+
 fn main() {
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![get_codex_version, get_full_config, get_credentials, list_nodes, switch_node])
+    .invoke_handler(tauri::generate_handler![
+      get_codex_version,
+      get_full_config,
+      get_credentials,
+      list_nodes,
+      switch_node,
+      upsert_node,
+      delete_node,
+      update_node_credential,
+    ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
