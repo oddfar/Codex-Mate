@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { invoke } from '@tauri-apps/api/tauri'
+import { invoke } from '@tauri-apps/api/core'
 
 type CodexVersion = {
   installed: boolean

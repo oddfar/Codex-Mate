@@ -305,7 +305,7 @@ struct McpServer {
 fn list_mcp_servers() -> Result<Vec<McpServer>, String> {
   let cfg = read_config_value()?;
   let mut res = vec![];
-  if let Some(mcp) = cfg.get("mcp_servers").and_then(|v| v.as_object()) {
+  if let Some(mcp) = cfg.get("mcp_servers").and_then(|v| v.as_table()) {
     for (name, item) in mcp.iter() {
       let command = item.get("command").and_then(|v| v.as_str()).map(|s| s.to_string());
       let args = item.get("args").and_then(|v| v.as_array()).map(|arr| {
@@ -350,7 +350,7 @@ struct ProjectEntry { path: String, trust_level: String }
 fn list_projects() -> Result<Vec<ProjectEntry>, String> {
   let cfg = read_config_value()?;
   let mut res = vec![];
-  if let Some(projects) = cfg.get("projects").and_then(|v| v.as_object()) {
+  if let Some(projects) = cfg.get("projects").and_then(|v| v.as_table()) {
     for (path, item) in projects.iter() {
       let trust = item.get("trust_level").and_then(|v| v.as_str()).unwrap_or("").to_string();
       res.push(ProjectEntry { path: path.clone(), trust_level: trust });
