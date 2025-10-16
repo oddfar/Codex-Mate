@@ -34,6 +34,16 @@ export function Nodes() {
 
   useEffect(() => { load() }, [])
 
+  const switchTo = async (name: string) => {
+    setErr(null)
+    try {
+      await invoke('switch_node', { name })
+      await load()
+    } catch (e: any) {
+      setErr(String(e))
+    }
+  }
+
   return (
     <section>
       <h2>节点</h2>
@@ -50,6 +60,7 @@ export function Nodes() {
                 <th>wire_api</th>
                 <th>需要OpenAI认证</th>
                 <th>有凭据</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -60,6 +71,9 @@ export function Nodes() {
                   <td>{p.wire_api ?? ''}</td>
                   <td>{String(p.requires_openai_auth ?? false)}</td>
                   <td>{p.has_credential ? '✓' : '✗'}</td>
+                  <td>
+                    <button disabled={p.name === data.current_provider} onClick={() => switchTo(p.name)}>切换</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -70,4 +84,3 @@ export function Nodes() {
     </section>
   )
 }
-

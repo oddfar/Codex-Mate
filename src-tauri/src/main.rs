@@ -5,6 +5,7 @@ use std::process::Command;
 use std::fs;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
+use std::io::Write;
 
 #[derive(Serialize)]
 struct CodexVersion {
@@ -90,9 +91,49 @@ fn list_nodes() -> Result<NodeList, String> {
   Ok(NodeList { current_provider, providers })
 }
 
+fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
+  let parent = path.parent().ok_or_else(|| "invalid path".to_string())?;
+  fs::create_dir_all(parent).map_err(|e| format!("create dir {} failed: {}", parent.display(), e))?;
+  let mut tmp = parent.to_path_buf();
+  tmp.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
+  {
+    let mut f = fs::File::create(&tmp).map_err(|e| format!("create temp file failed: {}", e))?;
+    f.write_all(content.as_bytes()).map_err(|e| format!("write temp file failed: {}", e))?;
+    f.sync_all().ok();
+  }
+  fs::rename(&tmp, path).map_err(|e| format!("rename temp file failed: {}", e))?;
+  Ok(())
+}
+
+#[tauri::command]
+fn switch_node(name: String) -> Result<(), String> {
+  // read credentials
+  let creds_path = codex_dir().join("codex-mate").join("credentials.json");
+  let creds_str = fs::read_to_string(&creds_path).map_err(|e| format!("read {} failed: {}", creds_path.display(), e))?;
+  let creds: serde_json::Value = serde_json::from_str(&creds_str).map_err(|e| format!("parse credentials failed: {}", e))?;
+  let key = creds.get(&name).and_then(|v| v.get("OPENAI_API_KEY")).and_then(|v| v.as_str()).ok_or_else(|| format!("credential not found for provider '{}'", name))?;
+
+  // write auth.json
+  let auth_path = codex_dir().join("auth.json");
+  let auth_content = serde_json::json!({ "OPENAI_API_KEY": key });
+  atomic_write(&auth_path, &serde_json::to_string_pretty(&auth_content).unwrap())?;
+
+  // update config.toml model_provider
+  let cfg_path = codex_dir().join("config.toml");
+  let cfg_str = fs::read_to_string(&cfg_path).map_err(|e| format!("read {} failed: {}", cfg_path.display(), e))?;
+  let mut v: TomlValue = toml::from_str(&cfg_str).map_err(|e| format!("parse toml failed: {}", e))?;
+  if let Some(tbl) = v.as_table_mut() {
+    tbl.insert("model_provider".into(), TomlValue::String(name));
+  }
+  let out = toml::to_string_pretty(&v).map_err(|e| e.to_string())?;
+  atomic_write(&cfg_path, &out)?;
+
+  Ok(())
+}
+
 fn main() {
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![get_codex_version, get_full_config, get_credentials, list_nodes])
+    .invoke_handler(tauri::generate_handler![get_codex_version, get_full_config, get_credentials, list_nodes, switch_node])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
