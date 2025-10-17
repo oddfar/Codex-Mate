@@ -47,7 +47,7 @@ export function Nodes() {
       const credential = form.key || undefined
       await invoke('upsert_node', {
         name: form.name,
-        provider_fields: providerFields,
+        providerFields: providerFields,
         credential,
       })
       resetForm()
@@ -73,11 +73,38 @@ export function Nodes() {
     }, '节点已删除')
   }
 
-  const handleUpdateCredential = async (name: string, key: string) => {
-    await execute(async () => {
-      await invoke('update_node_credential', { name, openai_api_key: key })
+  /**
+   * 更新节点凭据
+   * @param name 节点名称
+   * @param key API 密钥
+   */
+  // 返回 true 表示更新成功，false 表示失败（用于行内编辑器是否关闭）
+  const handleUpdateCredential = async (name: string, key: string): Promise<boolean> => {
+    const trimmed = key.trim()
+    console.log('[DEBUG] handleUpdateCredential called:', { name, keyLength: trimmed.length })
+    if (!trimmed) {
+      // 前端兜底校验，避免传空串到后端
+      alert('请输入有效的凭据')
+      return false
+    }
+    try {
+      console.log('[DEBUG] Invoking update_node_credential...')
+  await invoke('update_node_credential', { name, openaiApiKey: trimmed })
+      console.log('[DEBUG] Credential updated, reloading nodes...')
       await loadNodes()
-    }, '凭据已更新')
+      try {
+        const creds = await invoke<Record<string, any>>('get_credentials')
+      } catch (e) {
+        console.warn('[WARN] get_credentials invoke failed:', e)
+      }
+      console.log('[DEBUG] Nodes reloaded successfully')
+      return true
+    } catch (e: any) {
+      console.error('[ERROR] update_node_credential invoke failed:', e)
+      // 将后端错误抛给用户，便于迅速定位
+      alert(`保存凭据失败: ${String(e)}`)
+      return false
+    }
   }
 
   return (
@@ -190,18 +217,44 @@ type NodeRowProps = {
   isActive: boolean
   onSwitch: (name: string) => void
   onDelete: (name: string, isActive: boolean) => void
-  onUpdateCredential: (name: string, key: string) => void
+  onUpdateCredential: (name: string, key: string) => Promise<boolean>
 }
 
 function NodeRow({ provider, isActive, onSwitch, onDelete, onUpdateCredential }: NodeRowProps) {
   const [showKeyEditor, setShowKeyEditor] = useState(false)
   const [keyValue, setKeyValue] = useState('')
 
-  const handleSaveKey = () => {
-    if (keyValue) {
-      onUpdateCredential(provider.name, keyValue)
+  /**
+   * 保存凭据
+   * 1. 验证输入不为空
+   * 2. 调用父组件的 onUpdateCredential 函数
+   * 3. 保存成功后清空输入并关闭编辑器
+   */
+  const handleSaveKey = async () => {
+    const trimmedKey = keyValue.trim()
+    console.log('[DEBUG] NodeRow.handleSaveKey:', { provider: provider.name, keyLength: trimmedKey.length })
+    
+    if (!trimmedKey) {
+      console.warn('[DEBUG] Empty key, aborting')
+      alert('请输入凭据')
+      return
+    }
+    
+    console.log('[DEBUG] Calling onUpdateCredential...')
+    const ok = await onUpdateCredential(provider.name, trimmedKey)
+    console.log('[DEBUG] onUpdateCredential completed, result =', ok)
+    if (ok) {
       setKeyValue('')
       setShowKeyEditor(false)
+    } else {
+      // 失败时保留输入，避免用户二次输入；并弹出提示
+      alert('保存凭据失败，请查看页面顶部错误信息或后端日志')
+      try {
+        const info = await invoke('debug_credentials_info')
+        console.log('[DEBUG] debug_credentials_info:', info)
+      } catch (e) {
+        console.warn('[WARN] debug_credentials_info invoke failed:', e)
+      }
     }
   }
 

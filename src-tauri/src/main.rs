@@ -29,8 +29,11 @@ fn get_codex_version() -> CodexVersion {
   }
 }
 
+/// 获取 Codex 配置目录路径 (~/.codex)
 fn codex_dir() -> PathBuf {
-  dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")).join(".codex")
+  let path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")).join(".codex");
+  eprintln!("[DEBUG] codex_dir() = {}", path.display());
+  path
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -47,12 +50,40 @@ fn get_full_config() -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn get_credentials() -> Result<serde_json::Value, String> {
   let path = codex_dir().join("codex-mate").join("credentials.json");
+  eprintln!("[DEBUG] get_credentials: path = {}", path.display());
   if !path.exists() {
+    eprintln!("[DEBUG] get_credentials: file not found, returning empty object");
     return Ok(serde_json::json!({}));
   }
-  let content = fs::read_to_string(&path).map_err(|e| format!("read {} failed: {}", path.display(), e))?;
-  let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("parse json failed: {}", e))?;
-  Ok(v)
+  match fs::read_to_string(&path) {
+    Ok(content) => {
+      let trimmed = content.trim();
+      if trimmed.is_empty() {
+        // 文件存在但为空：返回 {}，避免前端功能受阻
+        eprintln!("[WARN] get_credentials: file exists but is empty, returning empty object");
+        return Ok(serde_json::json!({}));
+      }
+      match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(v) => {
+          eprintln!("[DEBUG] get_credentials: parsed successfully");
+          Ok(v)
+        }
+        Err(e) => {
+          // 解析失败也容错返回 {}，并打印警告日志，防止列表页崩溃
+          eprintln!("[WARN] get_credentials: parse failed ({}), returning empty object", e);
+          Ok(serde_json::json!({}))
+        }
+      }
+    }
+    Err(e) => {
+      eprintln!(
+        "[WARN] get_credentials: read {} failed: {}. Returning empty object",
+        path.display(),
+        e
+      );
+      Ok(serde_json::json!({}))
+    }
+  }
 }
 
 #[derive(Serialize)]
@@ -70,48 +101,112 @@ struct NodeList {
   providers: Vec<ProviderInfo>,
 }
 
+/// Tauri 命令: 列出所有节点及其状态
+/// 返回: 当前激活的节点和所有节点列表
 #[tauri::command]
 fn list_nodes() -> Result<NodeList, String> {
+  eprintln!("[DEBUG] list_nodes called");
+  
+  // 1. 读取配置文件
   let cfg = get_full_config()?;
+  
+  // 2. 读取凭据文件
   let creds = get_credentials()?;
+  eprintln!("[DEBUG] list_nodes: credentials loaded, type = {:?}", creds);
 
+  // 3. 获取当前激活的节点
   let current_provider = cfg.get("model_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+  eprintln!("[DEBUG] list_nodes: current_provider = {:?}", current_provider);
 
+  // 4. 遍历所有配置的节点
   let mut providers: Vec<ProviderInfo> = vec![];
   if let Some(mps) = cfg.get("model_providers").and_then(|v| v.as_object()) {
+    eprintln!("[DEBUG] list_nodes: found {} model_providers", mps.len());
     for (name, item) in mps.iter() {
       let base_url = item.get("base_url").and_then(|v| v.as_str()).map(|s| s.to_string());
       let wire_api = item.get("wire_api").and_then(|v| v.as_str()).map(|s| s.to_string());
       let requires_openai_auth = item.get("requires_openai_auth").and_then(|v| v.as_bool());
+      
+      // 检查该节点是否有凭据
       let has_credential = creds.get(name).and_then(|v| v.get("OPENAI_API_KEY")).and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+      eprintln!("[DEBUG] list_nodes: provider '{}' has_credential = {}", name, has_credential);
+      
       providers.push(ProviderInfo { name: name.clone(), base_url, wire_api, requires_openai_auth, has_credential });
     }
   }
 
+  eprintln!("[DEBUG] list_nodes: returning {} providers", providers.len());
   Ok(NodeList { current_provider, providers })
 }
 
+/// 原子写入文件
+/// 使用临时文件先写入，再重命名，确保数据不会因为写入中断而损坏
 fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
+  eprintln!("[DEBUG] atomic_write: target path = {}", path.display());
+  
+  // 1. 获取父目录并创建
   let parent = path.parent().ok_or_else(|| "invalid path".to_string())?;
+  eprintln!("[DEBUG] atomic_write: parent dir = {}", parent.display());
+  
   fs::create_dir_all(parent).map_err(|e| format!("create dir {} failed: {}", parent.display(), e))?;
+  eprintln!("[DEBUG] atomic_write: parent dir created/verified");
+  
+  // 2. 创建临时文件
   let mut tmp = parent.to_path_buf();
   tmp.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
+  eprintln!("[DEBUG] atomic_write: temp file = {}", tmp.display());
+  
   {
     let mut f = fs::File::create(&tmp).map_err(|e| format!("create temp file failed: {}", e))?;
+    eprintln!("[DEBUG] atomic_write: temp file created, writing {} bytes", content.len());
+    
     f.write_all(content.as_bytes()).map_err(|e| format!("write temp file failed: {}", e))?;
     f.sync_all().ok();
+    eprintln!("[DEBUG] atomic_write: content written and synced");
   }
-  fs::rename(&tmp, path).map_err(|e| format!("rename temp file failed: {}", e))?;
+  
+  // 3. 重命名临时文件为目标文件（失败则尝试降级写入）
+  match fs::rename(&tmp, path) {
+    Ok(_) => {
+      eprintln!("[DEBUG] atomic_write: file renamed to target path successfully");
+    }
+    Err(e) => {
+      eprintln!("[WARN] atomic_write: rename failed ({}), trying fallback write", e);
+      // fallback: 读取临时文件内容，直接写入目标文件
+      let data = fs::read(&tmp).map_err(|e| format!("fallback read temp failed: {}", e))?;
+      let mut f2 = fs::File::create(path).map_err(|e| format!("fallback create target failed: {}", e))?;
+      f2.write_all(&data).map_err(|e| format!("fallback write target failed: {}", e))?;
+      f2.sync_all().ok();
+      // 删除临时文件
+      let _ = fs::remove_file(&tmp);
+      eprintln!("[DEBUG] atomic_write: fallback write completed ({} bytes)", data.len());
+    }
+  }
+
+  // 4. 目录级别 fsync，确保重命名对文件系统可见（macOS/Unix 推荐）
+  if let Some(parent_dir) = path.parent() {
+    if let Ok(dir_file) = fs::File::open(parent_dir) {
+      let _ = dir_file.sync_all();
+      eprintln!("[DEBUG] atomic_write: parent directory fsync completed");
+    } else {
+      eprintln!("[WARN] atomic_write: failed to open parent directory for fsync");
+    }
+  }
+  
   Ok(())
 }
 
 #[tauri::command]
 fn switch_node(name: String) -> Result<(), String> {
-  // read credentials
-  let creds_path = codex_dir().join("codex-mate").join("credentials.json");
-  let creds_str = fs::read_to_string(&creds_path).map_err(|e| format!("read {} failed: {}", creds_path.display(), e))?;
-  let creds: serde_json::Value = serde_json::from_str(&creds_str).map_err(|e| format!("parse credentials failed: {}", e))?;
-  let key = creds.get(&name).and_then(|v| v.get("OPENAI_API_KEY")).and_then(|v| v.as_str()).ok_or_else(|| format!("credential not found for provider '{}'", name))?;
+  eprintln!("[DEBUG] switch_node called: name = '{}'", name);
+  // 读取凭据（容错：空文件/损坏文件均返回空 Map）
+  let creds_map = read_credentials_value()?;
+  let key = creds_map
+    .get(&name)
+    .and_then(|v| v.get("OPENAI_API_KEY"))
+    .and_then(|v| v.as_str())
+    .ok_or_else(|| format!("credential not found for provider '{}'", name))?;
+  eprintln!("[DEBUG] switch_node: credential found, key_length = {}", key.len());
 
   // write auth.json
   let auth_path = codex_dir().join("auth.json");
@@ -143,20 +238,56 @@ fn write_config_value(v: &TomlValue) -> Result<(), String> {
   atomic_write(&cfg_path, &out)
 }
 
+/// 读取凭据文件，返回凭据的 Map 结构
+/// 文件路径: ~/.codex/codex-mate/credentials.json
 fn read_credentials_value() -> Result<serde_json::Map<String, serde_json::Value>, String> {
   let path = codex_dir().join("codex-mate").join("credentials.json");
+  eprintln!("[DEBUG] read_credentials_value: path = {}", path.display());
+  
   if !path.exists() {
+    eprintln!("[DEBUG] read_credentials_value: file does not exist, returning empty map");
     return Ok(serde_json::Map::new());
   }
+
   let content = fs::read_to_string(&path).map_err(|e| format!("read {} failed: {}", path.display(), e))?;
-  let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("parse json failed: {}", e))?;
-  Ok(v.as_object().cloned().unwrap_or_default())
+  eprintln!("[DEBUG] read_credentials_value: file content length = {}", content.len());
+
+  let trimmed = content.trim();
+  if trimmed.is_empty() {
+    // 文件为空时，容错返回空 Map，避免后续更新失败
+    eprintln!("[WARN] read_credentials_value: file is empty, returning empty map");
+    return Ok(serde_json::Map::new());
+  }
+
+  match serde_json::from_str::<serde_json::Value>(trimmed) {
+    Ok(v) => {
+      let result = v.as_object().cloned().unwrap_or_default();
+      eprintln!("[DEBUG] read_credentials_value: parsed map has {} entries", result.len());
+      Ok(result)
+    }
+    Err(e) => {
+      // 当文件损坏/格式不正确时，打印警告并返回空 Map，让调用方可以继续写入修复
+      eprintln!("[WARN] read_credentials_value: parse failed ({}), returning empty map", e);
+      Ok(serde_json::Map::new())
+    }
+  }
 }
 
+/// 写入凭据文件，使用原子写入保证数据安全
+/// 文件路径: ~/.codex/codex-mate/credentials.json
 fn write_credentials_value(map: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
   let path = codex_dir().join("codex-mate").join("credentials.json");
+  eprintln!("[DEBUG] write_credentials_value: path = {}", path.display());
+  eprintln!("[DEBUG] write_credentials_value: writing {} entries", map.len());
+  
   let s = serde_json::to_string_pretty(&serde_json::Value::Object(map.clone())).map_err(|e| e.to_string())?;
-  atomic_write(&path, &s)
+  eprintln!("[DEBUG] write_credentials_value: json content = {}", s);
+  
+  let byte_len = s.as_bytes().len();
+  atomic_write(&path, &s)?;
+  eprintln!("[DEBUG] write_credentials_value: file written successfully ({} bytes)", byte_len);
+  
+  Ok(())
 }
 
 #[tauri::command]
@@ -218,9 +349,19 @@ fn upsert_node(name: String, provider_fields: serde_json::Value, credential: Opt
   write_config_value(&cfg)?;
 
   if let Some(key) = credential {
-    let mut map = read_credentials_value()?;
-    map.insert(name.clone(), serde_json::json!({"OPENAI_API_KEY": key}));
-    write_credentials_value(&map)?;
+    let trimmed_key = key.trim().to_string();
+    if !trimmed_key.is_empty() {
+      eprintln!("[DEBUG] upsert_node: writing credential for provider '{}', key_length = {}", name, trimmed_key.len());
+      let mut map = read_credentials_value()?;
+      map.insert(name.clone(), serde_json::json!({"OPENAI_API_KEY": trimmed_key}));
+      write_credentials_value(&map)?;
+      // 回读校验
+      let verify = read_credentials_value()?;
+      let ok = verify.get(&name).and_then(|v| v.get("OPENAI_API_KEY")).and_then(|v| v.as_str()).is_some();
+      eprintln!("[DEBUG] upsert_node: credential persisted = {}", ok);
+    } else {
+      eprintln!("[WARN] upsert_node: provided credential is empty, skipping write");
+    }
   }
 
   Ok(())
@@ -262,11 +403,52 @@ fn write_config_raw(content: String) -> Result<(), String> {
   atomic_write(&cfg_path, &content)
 }
 
+/// Tauri 命令: 更新指定节点的凭据
+/// 参数:
+///   - name: 节点名称 (例如: "packycode", "openai-chat-completions")
+///   - openai_api_key: OpenAI API 密钥
 #[tauri::command]
 fn update_node_credential(name: String, openai_api_key: String) -> Result<(), String> {
+  let trimmed_name = name.trim().to_string();
+  let trimmed_key = openai_api_key.trim().to_string();
+  eprintln!(
+    "[DEBUG] update_node_credential called: name='{}'(len {}), key_length = {}",
+    trimmed_name,
+    trimmed_name.len(),
+    trimmed_key.len()
+  );
+
+  if trimmed_name.is_empty() {
+    return Err("provider name is empty".into());
+  }
+  if trimmed_key.is_empty() {
+    return Err("credential is empty".into());
+  }
+
+  // 1. 读取现有凭据
   let mut map = read_credentials_value()?;
-  map.insert(name.clone(), serde_json::json!({"OPENAI_API_KEY": openai_api_key}));
+  eprintln!("[DEBUG] update_node_credential: loaded {} existing credentials", map.len());
+
+  // 2. 插入或更新指定节点的凭据
+  map.insert(trimmed_name.clone(), serde_json::json!({"OPENAI_API_KEY": trimmed_key}));
+  eprintln!("[DEBUG] update_node_credential: after insert, map has {} entries", map.len());
+
+  // 3. 写入文件
   write_credentials_value(&map)?;
+  eprintln!("[DEBUG] update_node_credential: write_credentials_value finished");
+
+  // 4. 回读校验，确保落盘成功
+  let verify = read_credentials_value()?;
+  let ok = verify
+    .get(&trimmed_name)
+    .and_then(|v| v.get("OPENAI_API_KEY"))
+    .and_then(|v| v.as_str())
+    .is_some();
+  eprintln!("[DEBUG] update_node_credential: verify persisted = {}", ok);
+  if !ok {
+    eprintln!("[WARN] update_node_credential: credential not found after write");
+  }
+
   Ok(())
 }
 
@@ -281,6 +463,7 @@ fn main() {
       upsert_node,
       delete_node,
       update_node_credential,
+      debug_credentials_info,
       list_mcp_servers,
       upsert_mcp_server,
       delete_mcp_server,
@@ -380,4 +563,41 @@ fn delete_project(path: String) -> Result<(), String> {
     projects.remove(&path);
   }
   write_config_value(&cfg)
+}
+
+/// 调试命令：返回 credentials.json 的路径、是否存在、长度、以及文件内容（用于排查写入问题）
+#[tauri::command]
+fn debug_credentials_info() -> Result<serde_json::Value, String> {
+  let path = codex_dir().join("codex-mate").join("credentials.json");
+  let path_str = path.to_string_lossy().to_string();
+  let exists = path.exists();
+  if !exists {
+    eprintln!("[DEBUG] debug_credentials_info: file not exists: {}", path_str);
+    return Ok(serde_json::json!({
+      "path": path_str,
+      "exists": false
+    }));
+  }
+  match fs::read_to_string(&path) {
+    Ok(content) => {
+      let len = content.len();
+      let trimmed_empty = content.trim().is_empty();
+      eprintln!("[DEBUG] debug_credentials_info: exists={}, len={}, trimmed_empty={}", exists, len, trimmed_empty);
+      Ok(serde_json::json!({
+        "path": path_str,
+        "exists": true,
+        "len": len,
+        "trimmed_empty": trimmed_empty,
+        "content": content
+      }))
+    }
+    Err(e) => {
+      eprintln!("[WARN] debug_credentials_info: read failed: {}", e);
+      Ok(serde_json::json!({
+        "path": path_str,
+        "exists": true,
+        "read_error": e.to_string()
+      }))
+    }
+  }
 }
