@@ -20,7 +20,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Codex Mate ${{ github.ref_name }}
-          draft: true
+          draft: false
           prerelease: false
 
   build-app:
@@ -89,6 +89,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Codex Mate ${{ github.ref_name }}
           releaseBody: ""
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
