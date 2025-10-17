@@ -1,0 +1,45 @@
+name: Tag and Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to tag (e.g., v0.0.1). If empty, will auto bump patch from latest tag or start at v0.0.1"
+        required: false
+        default: ""
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine next version
+        id: ver
+        shell: bash
+        run: |
+          INPUT_VERSION=$(echo "${{ github.event.inputs.version }}")
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "next=$INPUT_VERSION" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -z "$LAST_TAG" ]; then
+            echo "next=v0.0.1" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          IFS='.' read -r MAJOR MINOR PATCH <<<"${LAST_TAG#v}"
+          PATCH=$((PATCH+1))
+          echo "next=v$MAJOR.$MINOR.$PATCH" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git tag ${{ steps.ver.outputs.next }}
+          git push origin ${{ steps.ver.outputs.next }}

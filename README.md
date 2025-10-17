@@ -1,5 +1,26 @@
 # Codex Mate
 
+
+## 发布打包（GitHub Releases）
+
+本仓库已配置 GitHub Actions 实现跨平台打包并发布到 Releases：
+
+- 触发方式：推送形如 `v*` 的标签（例如 `v0.0.1`）。
+- 支持平台：
+  - macOS: `aarch64-apple-darwin` (macos-14) 与 `x86_64-apple-darwin` (macos-13)
+  - Linux: `x86_64-unknown-linux-gnu` (ubuntu-22.04)
+  - Windows: `x86_64-pc-windows-msvc` (windows-latest)
+- 工作流文件：`.github/workflows/release.yml`
+
+快速开始：
+
+1. 在仓库的 Actions 页面运行 “Tag and Bump Version” 工作流（`.github/workflows/tag-and-bump.yml`）。
+   - 可手动填写版本号（例如 `v0.0.1`）；若留空将基于最新标签自动 +1 patch，若不存在则从 `v0.0.1` 开始。
+2. 推送标签后会自动触发 “Release CI”，构建各平台安装包并上传到对应的 GitHub Release（草稿）。
+3. 如需签名，请在仓库 Secrets 中配置：`TAURI_PRIVATE_KEY` 和 `TAURI_KEY_PASSWORD`。
+
+注意：`tauri.conf.json`/`Cargo.toml`/`package.json` 中的 version 不会被自动写回（Release 以标签为准）。如需同步应用内版本，请手动更新。
+
 <div align="center">
 
 ![Codex Mate Logo](https://via.placeholder.com/150)
