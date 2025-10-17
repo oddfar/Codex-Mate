@@ -68,7 +68,7 @@ jobs:
             curl wget file pkg-config
 
       - name: Install app dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       - name: Install WiX Toolset (Windows only)
         if: matrix.platform == 'windows-latest'
@@ -87,12 +87,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Codex Mate ${{ github.ref_name }}
           releaseBody: ""
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
-      
-      - name: Install WiX Toolset (Windows only)
-        if: matrix.platform == 'windows-latest'
-        shell: powershell
-        run: |
-          choco install wixtoolset --version=3.14.0 -y || choco install wixtoolset -y
