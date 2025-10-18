@@ -1,0 +1,266 @@
+name: 发布应用
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # 匹配 v0.0.1、v1.2.3 等版本标签
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 创建 Release
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: 获取版本号
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: 创建 Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Codex-Mate v${{ steps.get_version.outputs.version }}
+          body: |
+            ## 🎉 Codex-Mate v${{ steps.get_version.outputs.version }}
+            
+            ### 下载说明
+            - **Windows**: 下载 `.exe` 或 `.msi` 文件
+            - **macOS**: 下载 `.dmg` 文件
+              - Intel 芯片: `x64.dmg`
+              - Apple Silicon (M系列): `aarch64.dmg`
+            - **Linux**: 
+              - Debian/Ubuntu: 下载 `.deb` 文件
+              - RedHat/Fedora: 下载 `.rpm` 文件
+              - AppImage: 下载 `.AppImage` 文件（通用）
+            
+            ### 更新内容
+            请查看下方的更新日志
+
+          draft: false
+          prerelease: false
+
+  # Windows 构建
+  build-windows:
+    needs: create-release
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 安装前端依赖
+        run: pnpm install
+
+      - name: 更新版本号
+        run: |
+          # 更新 package.json 版本号
+          $version = "${{ needs.create-release.outputs.version }}"
+          $packageJson = Get-Content package.json | ConvertFrom-Json
+          $packageJson.version = $version
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content package.json
+          
+          # 更新 tauri.conf.json 版本号
+          $tauriConf = Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json
+          $tauriConf.version = $version
+          $tauriConf | ConvertTo-Json -Depth 100 | Set-Content src-tauri/tauri.conf.json
+          
+          # 更新 Cargo.toml 版本号
+          (Get-Content src-tauri/Cargo.toml) -replace 'version = ".*"', "version = `"$version`"" | Set-Content src-tauri/Cargo.toml
+
+      - name: 构建 Tauri 应用
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: 上传 MSI 安装包
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/msi/Codex-Mate_${{ needs.create-release.outputs.version }}_x64_en-US.msi
+          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.msi
+          asset_content_type: application/x-msi
+
+      - name: 上传 NSIS 安装包
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe
+          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe
+          asset_content_type: application/x-msdownload
+
+  # macOS 构建
+  build-macos:
+    needs: create-release
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 安装前端依赖
+        run: pnpm install
+
+      - name: 更新版本号
+        run: |
+          # 更新 package.json 版本号
+          sed -i '' 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
+          
+          # 更新 tauri.conf.json 版本号
+          sed -i '' 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
+          
+          # 更新 Cargo.toml 版本号
+          sed -i '' 's/version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
+
+      - name: 构建 Tauri 应用
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: 设置架构变量
+        id: arch
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            echo "arch=aarch64" >> $GITHUB_OUTPUT
+          else
+            echo "arch=x64" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 上传 DMG 安装包
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Codex-Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg
+          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg
+          asset_content_type: application/x-apple-diskimage
+
+  # Linux 构建
+  build-linux:
+    needs: create-release
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 安装前端依赖
+        run: pnpm install
+
+      - name: 更新版本号
+        run: |
+          # 更新 package.json 版本号
+          sed -i 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
+          
+          # 更新 tauri.conf.json 版本号
+          sed -i 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
+          
+          # 更新 Cargo.toml 版本号
+          sed -i 's/version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
+
+      - name: 构建 Tauri 应用
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: 上传 DEB 包
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/deb/codex-mate_${{ needs.create-release.outputs.version }}_amd64.deb
+          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_amd64.deb
+          asset_content_type: application/vnd.debian.binary-package
+
+      - name: 上传 RPM 包
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/rpm/codex-mate-${{ needs.create-release.outputs.version }}-1.x86_64.rpm
+          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}-1.x86_64.rpm
+          asset_content_type: application/x-rpm
+
+      - name: 上传 AppImage
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/appimage/codex-mate_${{ needs.create-release.outputs.version }}_amd64.AppImage
+          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_amd64.AppImage
+          asset_content_type: application/x-executable
+
