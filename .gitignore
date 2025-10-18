@@ -75,3 +75,6 @@ coverage/
 # 备份文件
 *.bak
 *.backup
+
+# 图标生成源文件
+app-icon.png

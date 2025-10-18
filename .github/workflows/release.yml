@@ -76,6 +76,7 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install
 
+      # 更新版本号到配置文件 - 将Git标签中的版本号同步到项目配置文件
       - name: 更新版本号
         run: |
           # 更新 package.json 版本号
@@ -92,26 +93,29 @@ jobs:
           # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
           (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$version`"" | Set-Content src-tauri/Cargo.toml
 
+      # 构建 Tauri 应用 - 编译Rust后端和打包前端，生成Windows安装包
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
 
+      # 上传 MSI 安装包 - Windows Installer格式，产品名称会转换为"Codex Mate"（带空格）
       - name: 上传 MSI 安装包
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/msi/Codex-Mate_${{ needs.create-release.outputs.version }}_x64_en-US.msi
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/msi/Codex Mate_${{ needs.create-release.outputs.version }}_x64_en-US.msi
           asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.msi
           asset_content_type: application/x-msi
 
+      # 上传 NSIS 安装包 - 产品名称会转换为"Codex Mate"（带空格）
       - name: 上传 NSIS 安装包
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Codex Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe
           asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe
           asset_content_type: application/x-msdownload
 
@@ -144,6 +148,7 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install
 
+      # 更新版本号到配置文件 - 将Git标签中的版本号同步到项目配置文件
       - name: 更新版本号
         run: |
           # 更新 package.json 版本号（只更新第一个 version 字段）
@@ -155,9 +160,11 @@ jobs:
           # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
           sed -i '' '0,/^version = /s/^version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
 
+      # 构建 Tauri 应用 - 编译Rust后端和打包前端，生成macOS安装包
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
 
+      # 设置架构变量 - 将Rust目标架构转换为用户友好的名称（aarch64 -> Apple Silicon, x86_64 -> Intel）
       - name: 设置架构变量
         id: arch
         run: |
@@ -167,13 +174,14 @@ jobs:
             echo "arch=x64" >> $GITHUB_OUTPUT
           fi
 
+      # 上传 DMG 安装包 - macOS安装包，产品名称会转换为"Codex Mate"（带空格）
       - name: 上传 DMG 安装包
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Codex-Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg
+          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Codex Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg
           asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg
           asset_content_type: application/x-apple-diskimage
 
@@ -220,6 +228,7 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install
 
+      # 更新版本号到配置文件 - 将Git标签中的版本号同步到项目配置文件
       - name: 更新版本号
         run: |
           # 更新 package.json 版本号（只更新第一个 version 字段）
@@ -231,9 +240,11 @@ jobs:
           # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
           sed -i '0,/^version = /s/^version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
 
+      # 构建 Tauri 应用 - 编译Rust后端和打包前端，生成Linux安装包
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
 
+      # 上传 DEB 包 - Debian/Ubuntu安装包，使用小写的包名"codex-mate"
       - name: 上传 DEB 包
         uses: actions/upload-release-asset@v1
         env:
@@ -244,6 +255,7 @@ jobs:
           asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_amd64.deb
           asset_content_type: application/vnd.debian.binary-package
 
+      # 上传 RPM 包 - RedHat/Fedora安装包，使用小写的包名"codex-mate"
       - name: 上传 RPM 包
         uses: actions/upload-release-asset@v1
         env:
@@ -254,6 +266,7 @@ jobs:
           asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}-1.x86_64.rpm
           asset_content_type: application/x-rpm
 
+      # 上传 AppImage - 通用Linux可执行包，使用小写的包名"codex-mate"
       - name: 上传 AppImage
         uses: actions/upload-release-asset@v1
         env:
