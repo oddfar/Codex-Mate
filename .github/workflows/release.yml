@@ -89,8 +89,8 @@ jobs:
           $tauriConf.version = $version
           $tauriConf | ConvertTo-Json -Depth 100 | Set-Content src-tauri/tauri.conf.json
           
-          # 更新 Cargo.toml 版本号
-          (Get-Content src-tauri/Cargo.toml) -replace 'version = ".*"', "version = `"$version`"" | Set-Content src-tauri/Cargo.toml
+          # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
+          (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$version`"" | Set-Content src-tauri/Cargo.toml
 
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
@@ -146,14 +146,14 @@ jobs:
 
       - name: 更新版本号
         run: |
-          # 更新 package.json 版本号
-          sed -i '' 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
+          # 更新 package.json 版本号（只更新第一个 version 字段）
+          sed -i '' '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
           
-          # 更新 tauri.conf.json 版本号
-          sed -i '' 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
+          # 更新 tauri.conf.json 版本号（只更新第一个 version 字段）
+          sed -i '' '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
           
-          # 更新 Cargo.toml 版本号
-          sed -i '' 's/version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
+          # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
+          sed -i '' '0,/^version = /s/^version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
 
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
@@ -222,14 +222,14 @@ jobs:
 
       - name: 更新版本号
         run: |
-          # 更新 package.json 版本号
-          sed -i 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
+          # 更新 package.json 版本号（只更新第一个 version 字段）
+          sed -i '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
           
-          # 更新 tauri.conf.json 版本号
-          sed -i 's/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
+          # 更新 tauri.conf.json 版本号（只更新第一个 version 字段）
+          sed -i '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
           
-          # 更新 Cargo.toml 版本号
-          sed -i 's/version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
+          # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
+          sed -i '0,/^version = /s/^version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
 
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
