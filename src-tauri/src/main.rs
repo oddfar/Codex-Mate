@@ -112,7 +112,6 @@ fn list_nodes() -> Result<NodeList, String> {
   
   // 2. 读取凭据文件
   let creds = get_credentials()?;
-  eprintln!("[DEBUG] list_nodes: credentials loaded, type = {:?}", creds);
 
   // 3. 获取当前激活的节点
   let current_provider = cfg.get("model_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
