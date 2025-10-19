@@ -16,10 +16,12 @@ jobs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
+      # 从标签中提取版本号（去掉 v 前缀）
       - name: 获取版本号
         id: get_version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
+      # 创建 GitHub Release
       - name: 创建 Release
         id: create_release
         uses: actions/create-release@v1
@@ -80,40 +82,75 @@ jobs:
         run: |
           # 更新 package.json 版本号
           $version = "${{ needs.create-release.outputs.version }}"
-          $packageJson = Get-Content package.json | ConvertFrom-Json
+          $packageJson = Get-Content package.json -Raw | ConvertFrom-Json
           $packageJson.version = $version
-          $packageJson | ConvertTo-Json -Depth 100 | Set-Content package.json
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content package.json -Encoding UTF8
           
           # 更新 tauri.conf.json 版本号
-          $tauriConf = Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json
+          $tauriConf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
           $tauriConf.version = $version
-          $tauriConf | ConvertTo-Json -Depth 100 | Set-Content src-tauri/tauri.conf.json
+          $tauriConf | ConvertTo-Json -Depth 100 | Set-Content src-tauri/tauri.conf.json -Encoding UTF8
           
           # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
-          (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$version`"" | Set-Content src-tauri/Cargo.toml
+          $cargoContent = Get-Content src-tauri/Cargo.toml -Raw
+          # 使用正则表达式只替换 [package] 部分的第一个 version
+          $cargoContent = $cargoContent -replace '(?ms)(\[package\][^\[]*?version\s*=\s*")[^"]*(")', "`${1}$version`$2"
+          Set-Content src-tauri/Cargo.toml -Value $cargoContent -Encoding UTF8
 
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
 
-      - name: 上传 MSI 安装包
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/msi/Codex-Mate_${{ needs.create-release.outputs.version }}_x64_en-US.msi
-          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.msi
-          asset_content_type: application/x-msi
+      # 列出构建产物，便于调试
+      - name: 列出构建产物
+        run: |
+          echo "=== MSI 文件 ==="
+          Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/msi/" -Recurse
+          echo "=== NSIS 文件 ==="
+          Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/nsis/" -Recurse
 
+      # 查找并上传 MSI 安装包（使用通配符查找实际文件）
+      - name: 上传 MSI 安装包
+        shell: pwsh
+        run: |
+          $msiFile = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/msi/" -Filter "*.msi" | Select-Object -First 1
+          if ($msiFile) {
+            echo "找到 MSI 文件: $($msiFile.FullName)"
+            $assetName = "Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.msi"
+            
+            $headers = @{
+              "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}"
+              "Content-Type" = "application/x-msi"
+            }
+            
+            $uploadUrl = "${{ needs.create-release.outputs.upload_url }}".Replace('{?name,label}', "?name=$assetName")
+            
+            Invoke-WebRequest -Uri $uploadUrl -Method Post -InFile $msiFile.FullName -Headers $headers
+          } else {
+            echo "错误: 未找到 MSI 文件"
+            exit 1
+          }
+
+      # 查找并上传 NSIS 安装包（使用通配符查找实际文件）
       - name: 上传 NSIS 安装包
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe
-          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe
-          asset_content_type: application/x-msdownload
+        shell: pwsh
+        run: |
+          $exeFile = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/nsis/" -Filter "*-setup.exe" | Select-Object -First 1
+          if ($exeFile) {
+            echo "找到 NSIS 文件: $($exeFile.FullName)"
+            $assetName = "Codex-Mate_${{ needs.create-release.outputs.version }}_x64-setup.exe"
+            
+            $headers = @{
+              "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}"
+              "Content-Type" = "application/x-msdownload"
+            }
+            
+            $uploadUrl = "${{ needs.create-release.outputs.upload_url }}".Replace('{?name,label}', "?name=$assetName")
+            
+            Invoke-WebRequest -Uri $uploadUrl -Method Post -InFile $exeFile.FullName -Headers $headers
+          } else {
+            echo "错误: 未找到 NSIS 文件"
+            exit 1
+          }
 
   # macOS 构建
   build-macos:
@@ -146,18 +183,27 @@ jobs:
 
       - name: 更新版本号
         run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          
           # 更新 package.json 版本号（只更新第一个 version 字段）
-          sed -i '' '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
+          sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
           
           # 更新 tauri.conf.json 版本号（只更新第一个 version 字段）
-          sed -i '' '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
+          sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
           
-          # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
-          sed -i '' '0,/^version = /s/^version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
+          # 更新 Cargo.toml 版本号（只更新第一个出现的 version = "..."）
+          sed -i '' "0,/^version = /s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
 
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
 
+      # 列出构建产物，便于调试
+      - name: 列出构建产物
+        run: |
+          echo "=== DMG 文件 ==="
+          ls -la src-tauri/target/${{ matrix.target }}/release/bundle/dmg/ || echo "DMG 目录不存在"
+
+      # 根据目标架构设置变量
       - name: 设置架构变量
         id: arch
         run: |
@@ -167,15 +213,29 @@ jobs:
             echo "arch=x64" >> $GITHUB_OUTPUT
           fi
 
+      # 查找并上传 DMG 安装包（动态查找，处理文件名中的空格）
       - name: 上传 DMG 安装包
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Codex-Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg
-          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg
-          asset_content_type: application/x-apple-diskimage
+        run: |
+          # 查找 DMG 文件（可能包含空格）
+          DMG_FILE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg/ -name "*.dmg" | head -n 1)
+          
+          if [ -z "$DMG_FILE" ]; then
+            echo "错误: 未找到 DMG 文件"
+            exit 1
+          fi
+          
+          echo "找到 DMG 文件: $DMG_FILE"
+          
+          # 上传文件
+          ASSET_NAME="Codex-Mate_${{ needs.create-release.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg"
+          UPLOAD_URL="${{ needs.create-release.outputs.upload_url }}"
+          UPLOAD_URL="${UPLOAD_URL/\{?name,label\}/}"
+          
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/x-apple-diskimage" \
+            --data-binary @"$DMG_FILE" \
+            "${UPLOAD_URL}?name=${ASSET_NAME}"
 
   # Linux 构建
   build-linux:
@@ -188,6 +248,7 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      # 安装 Linux 构建所需的系统依赖
       - name: 安装系统依赖
         run: |
           sudo apt-get update
@@ -222,45 +283,98 @@ jobs:
 
       - name: 更新版本号
         run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          
           # 更新 package.json 版本号（只更新第一个 version 字段）
-          sed -i '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' package.json
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
           
           # 更新 tauri.conf.json 版本号（只更新第一个 version 字段）
-          sed -i '0,/"version":/s/"version": ".*"/"version": "${{ needs.create-release.outputs.version }}"/' src-tauri/tauri.conf.json
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
           
-          # 更新 Cargo.toml 版本号（只更新 [package] 部分的 version，不影响依赖项）
-          sed -i '0,/^version = /s/^version = ".*"/version = "${{ needs.create-release.outputs.version }}"/' src-tauri/Cargo.toml
+          # 更新 Cargo.toml 版本号（只更新第一个出现的 version = "..."）
+          sed -i "0,/^version = /s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
 
       - name: 构建 Tauri 应用
         run: pnpm tauri build --target ${{ matrix.target }}
 
+      # 列出构建产物，便于调试和确认文件名
+      - name: 列出构建产物
+        run: |
+          echo "=== DEB 文件 ==="
+          ls -la src-tauri/target/${{ matrix.target }}/release/bundle/deb/ || echo "DEB 目录不存在"
+          echo "=== RPM 文件 ==="
+          ls -la src-tauri/target/${{ matrix.target }}/release/bundle/rpm/ || echo "RPM 目录不存在"
+          echo "=== AppImage 文件 ==="
+          ls -la src-tauri/target/${{ matrix.target }}/release/bundle/appimage/ || echo "AppImage 目录不存在"
+
+      # 查找并上传 DEB 包（动态查找实际文件）
       - name: 上传 DEB 包
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/deb/codex-mate_${{ needs.create-release.outputs.version }}_amd64.deb
-          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_amd64.deb
-          asset_content_type: application/vnd.debian.binary-package
+        run: |
+          # 查找 DEB 文件
+          DEB_FILE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/deb/ -name "*.deb" | head -n 1)
+          
+          if [ -z "$DEB_FILE" ]; then
+            echo "错误: 未找到 DEB 文件"
+            exit 1
+          fi
+          
+          echo "找到 DEB 文件: $DEB_FILE"
+          
+          # 上传文件
+          ASSET_NAME="Codex-Mate_${{ needs.create-release.outputs.version }}_amd64.deb"
+          UPLOAD_URL="${{ needs.create-release.outputs.upload_url }}"
+          UPLOAD_URL="${UPLOAD_URL/\{?name,label\}/}"
+          
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/vnd.debian.binary-package" \
+            --data-binary @"$DEB_FILE" \
+            "${UPLOAD_URL}?name=${ASSET_NAME}"
 
+      # 查找并上传 RPM 包（动态查找实际文件）
       - name: 上传 RPM 包
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/rpm/codex-mate-${{ needs.create-release.outputs.version }}-1.x86_64.rpm
-          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}-1.x86_64.rpm
-          asset_content_type: application/x-rpm
+        run: |
+          # 查找 RPM 文件
+          RPM_FILE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/rpm/ -name "*.rpm" | head -n 1)
+          
+          if [ -z "$RPM_FILE" ]; then
+            echo "警告: 未找到 RPM 文件，跳过"
+            exit 0
+          fi
+          
+          echo "找到 RPM 文件: $RPM_FILE"
+          
+          # 上传文件
+          ASSET_NAME="Codex-Mate_${{ needs.create-release.outputs.version }}-1.x86_64.rpm"
+          UPLOAD_URL="${{ needs.create-release.outputs.upload_url }}"
+          UPLOAD_URL="${UPLOAD_URL/\{?name,label\}/}"
+          
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/x-rpm" \
+            --data-binary @"$RPM_FILE" \
+            "${UPLOAD_URL}?name=${ASSET_NAME}"
 
+      # 查找并上传 AppImage（动态查找实际文件）
       - name: 上传 AppImage
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/${{ matrix.target }}/release/bundle/appimage/codex-mate_${{ needs.create-release.outputs.version }}_amd64.AppImage
-          asset_name: Codex-Mate_${{ needs.create-release.outputs.version }}_amd64.AppImage
-          asset_content_type: application/x-executable
-
+        run: |
+          # 查找 AppImage 文件
+          APPIMAGE_FILE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/appimage/ -name "*.AppImage" | head -n 1)
+          
+          if [ -z "$APPIMAGE_FILE" ]; then
+            echo "警告: 未找到 AppImage 文件，跳过"
+            exit 0
+          fi
+          
+          echo "找到 AppImage 文件: $APPIMAGE_FILE"
+          
+          # 上传文件
+          ASSET_NAME="Codex-Mate_${{ needs.create-release.outputs.version }}_amd64.AppImage"
+          UPLOAD_URL="${{ needs.create-release.outputs.upload_url }}"
+          UPLOAD_URL="${UPLOAD_URL/\{?name,label\}/}"
+          
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/x-executable" \
+            --data-binary @"$APPIMAGE_FILE" \
+            "${UPLOAD_URL}?name=${ASSET_NAME}"
