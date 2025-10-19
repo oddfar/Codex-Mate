@@ -58,6 +58,18 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install
 
+      # 生成应用图标（从 icon.png 生成所有平台所需的图标格式）
+      - name: 生成应用图标
+        run: |
+          # 确保图标源文件存在
+          if [ ! -f "src-tauri/icons/icon.png" ]; then
+            echo "错误: 图标文件 icon.png 不存在"
+            exit 1
+          fi
+          # 使用 Tauri CLI 生成所有平台的图标
+          pnpm tauri icon src-tauri/icons/icon.png
+        shell: bash
+
       # 使用 Tauri Action 构建并发布
       - name: 构建 Tauri 应用并上传到 Release
         uses: tauri-apps/tauri-action@v0
