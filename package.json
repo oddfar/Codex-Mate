@@ -1,0 +1,13 @@
+{
+  "name": "codex-mate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Codex Mate utilities implementing core config and MCP/node management per doc/1 requirements.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "lint": "echo 'no lint configured'",
+    "build": "echo 'no build step'",
+    "test": "node -e \"console.log('no tests')\""
+  }
+}
