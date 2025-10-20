@@ -47,7 +47,7 @@ export function Nodes() {
       const credential = form.key || undefined
       await invoke('upsert_node', {
         name: form.name,
-        providerFields: providerFields,
+        provider_fields: providerFields,
         credential,
       })
       resetForm()
@@ -89,7 +89,7 @@ export function Nodes() {
     }
     try {
       console.log('[DEBUG] Invoking update_node_credential...')
-  await invoke('update_node_credential', { name, openaiApiKey: trimmed })
+  await invoke('update_node_credential', { name, openai_api_key: trimmed })
       console.log('[DEBUG] Credential updated, reloading nodes...')
       await loadNodes()
       try {

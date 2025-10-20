@@ -2,11 +2,13 @@
  * 通用类型定义
  */
 
+import type { ComponentType } from 'react'
+
 // 菜单项类型
 export type MenuItem = {
   id: string
   label: string
-  component: React.ComponentType
+  component: ComponentType
 }
 
 // MCP Server 类型
