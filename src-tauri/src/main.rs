@@ -451,6 +451,31 @@ fn update_node_credential(name: String, openai_api_key: String) -> Result<(), St
   Ok(())
 }
 
+#[derive(Serialize)]
+struct AuthStatus { exists: bool, has_key: bool }
+
+#[tauri::command]
+fn get_auth_status() -> Result<AuthStatus, String> {
+  let path = codex_dir().join("auth.json");
+  if !path.exists() {
+    return Ok(AuthStatus { exists: false, has_key: false });
+  }
+  match fs::read_to_string(&path) {
+    Ok(content) => {
+      let has_key = serde_json::from_str::<serde_json::Value>(&content)
+        .ok()
+        .and_then(|v| v.get("OPENAI_API_KEY").cloned())
+        .and_then(|v| v.as_str().map(|s| !s.trim().is_empty()))
+        .unwrap_or(false);
+      Ok(AuthStatus { exists: true, has_key })
+    }
+    Err(_) => {
+      // 文件存在但读取失败，仍然标记 exists=true，但 has_key=false（容错）
+      Ok(AuthStatus { exists: true, has_key: false })
+    }
+  }
+}
+
 fn main() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
@@ -471,6 +496,7 @@ fn main() {
       list_projects,
       upsert_project,
       delete_project,
+      get_auth_status,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

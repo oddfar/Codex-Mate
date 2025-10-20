@@ -43,6 +43,12 @@ export type CodexVersion = {
   error?: string | null
 }
 
+// auth.json 状态
+export type AuthStatus = {
+  exists: boolean
+  has_key: boolean
+}
+
 // 通用响应状态
 export type LoadingState = {
   loading: boolean

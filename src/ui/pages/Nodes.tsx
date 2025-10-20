@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import type { NodeList, Provider } from '../../types'
+import type { AuthStatus, NodeList, Provider } from '../../types'
 import { useAsyncAction, useFormState } from '../../hooks'
 import { validateRequired } from '../../utils'
 import { Loading, ErrorMessage, Message } from '../components/Common'
@@ -10,6 +10,7 @@ import { Loading, ErrorMessage, Message } from '../components/Common'
  */
 export function Nodes() {
   const [data, setData] = useState<NodeList | null>(null)
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const { loading, error, success, execute, clearMessages } = useAsyncAction()
   const [form, updateField, updateForm, resetForm] = useFormState({
     name: '',
@@ -25,8 +26,18 @@ export function Nodes() {
     })
   }
 
+  const loadAuthStatus = async () => {
+    try {
+      const status = await invoke<AuthStatus>('get_auth_status')
+      setAuthStatus(status)
+    } catch (e) {
+      setAuthStatus(null)
+    }
+  }
+
   useEffect(() => {
     loadNodes()
+    loadAuthStatus()
   }, [])
 
   const handleSaveNode = async () => {
@@ -59,6 +70,7 @@ export function Nodes() {
     await execute(async () => {
       await invoke('switch_node', { name })
       await loadNodes()
+      await loadAuthStatus()
     }, `已切换到节点: ${name}`)
   }
 
@@ -89,7 +101,7 @@ export function Nodes() {
     }
     try {
       console.log('[DEBUG] Invoking update_node_credential...')
-  await invoke('update_node_credential', { name, openaiApiKey: trimmed })
+      await invoke('update_node_credential', { name, openaiApiKey: trimmed })
       console.log('[DEBUG] Credential updated, reloading nodes...')
       await loadNodes()
       try {
@@ -123,6 +135,11 @@ export function Nodes() {
             <Message type="info">
               当前激活节点: <strong>{data.current_provider || '未设置'}</strong>
             </Message>
+            {authStatus && (
+              <Message type={authStatus.exists ? 'success' : 'warning'}>
+                auth.json 状态: {authStatus.exists ? (authStatus.has_key ? '已存在（含密钥）' : '已存在（无密钥）') : '缺失'}
+              </Message>
+            )}
           </div>
         )}
 
@@ -181,7 +198,7 @@ export function Nodes() {
                   <th>Wire API</th>
                   <th>需要认证</th>
                   <th>有凭据</th>
-                  <th style={{ width: 280 }}>操作</th>
+                  <th style={{ width: 360 }}>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -200,6 +217,7 @@ export function Nodes() {
                       onSwitch={handleSwitchNode}
                       onDelete={handleDeleteNode}
                       onUpdateCredential={handleUpdateCredential}
+                      onSaved={loadNodes}
                     />
                   ))
                 )}
@@ -218,11 +236,42 @@ type NodeRowProps = {
   onSwitch: (name: string) => void
   onDelete: (name: string, isActive: boolean) => void
   onUpdateCredential: (name: string, key: string) => Promise<boolean>
+  onSaved: () => void
 }
 
-function NodeRow({ provider, isActive, onSwitch, onDelete, onUpdateCredential }: NodeRowProps) {
+function NodeRow({ provider, isActive, onSwitch, onDelete, onUpdateCredential, onSaved }: NodeRowProps) {
   const [showKeyEditor, setShowKeyEditor] = useState(false)
   const [keyValue, setKeyValue] = useState('')
+
+  const [isEditing, setIsEditing] = useState(false)
+  const [editBaseUrl, setEditBaseUrl] = useState(provider.base_url || '')
+  const [editWireApi, setEditWireApi] = useState(provider.wire_api || 'responses')
+  const [editRequiresAuth, setEditRequiresAuth] = useState(!!provider.requires_openai_auth)
+
+  const startEdit = () => {
+    setEditBaseUrl(provider.base_url || '')
+    setEditWireApi(provider.wire_api || 'responses')
+    setEditRequiresAuth(!!provider.requires_openai_auth)
+    setIsEditing(true)
+  }
+
+  const saveEdit = async () => {
+    const validationError = validateRequired({ base_url: editBaseUrl }, ['base_url'])
+    if (validationError) {
+      alert(validationError)
+      return
+    }
+    await invoke('upsert_node', {
+      name: provider.name,
+      providerFields: {
+        base_url: editBaseUrl,
+        wire_api: editWireApi,
+        requires_openai_auth: editRequiresAuth,
+      },
+    })
+    setIsEditing(false)
+    onSaved()
+  }
 
   /**
    * 保存凭据
@@ -233,13 +282,13 @@ function NodeRow({ provider, isActive, onSwitch, onDelete, onUpdateCredential }:
   const handleSaveKey = async () => {
     const trimmedKey = keyValue.trim()
     console.log('[DEBUG] NodeRow.handleSaveKey:', { provider: provider.name, keyLength: trimmedKey.length })
-    
+
     if (!trimmedKey) {
       console.warn('[DEBUG] Empty key, aborting')
       alert('请输入凭据')
       return
     }
-    
+
     console.log('[DEBUG] Calling onUpdateCredential...')
     const ok = await onUpdateCredential(provider.name, trimmedKey)
     console.log('[DEBUG] onUpdateCredential completed, result =', ok)
@@ -256,6 +305,46 @@ function NodeRow({ provider, isActive, onSwitch, onDelete, onUpdateCredential }:
         console.warn('[WARN] debug_credentials_info invoke failed:', e)
       }
     }
+  }
+
+  if (isEditing) {
+    return (
+      <tr style={{ fontWeight: isActive ? 600 : 400 }}>
+        <td>{provider.name}</td>
+        <td>
+          <input
+            type="text"
+            value={editBaseUrl}
+            onChange={(e) => setEditBaseUrl(e.target.value)}
+            style={{ minWidth: 220 }}
+          />
+        </td>
+        <td>
+          <input
+            type="text"
+            value={editWireApi}
+            onChange={(e) => setEditWireApi(e.target.value)}
+            style={{ minWidth: 120 }}
+          />
+        </td>
+        <td>
+          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <input
+              type="checkbox"
+              checked={editRequiresAuth}
+              onChange={(e) => setEditRequiresAuth(e.target.checked)}
+            />
+          </label>
+        </td>
+        <td>{provider.has_credential ? '✓' : '✗'}</td>
+        <td>
+          <div className="btn-group">
+            <button onClick={saveEdit} className="btn btn-sm btn-success">保存</button>
+            <button onClick={() => setIsEditing(false)} className="btn btn-sm btn-outline">取消</button>
+          </div>
+        </td>
+      </tr>
+    )
   }
 
   return (
@@ -284,6 +373,7 @@ function NodeRow({ provider, isActive, onSwitch, onDelete, onUpdateCredential }:
             >
               {provider.has_credential ? '更新凭据' : '设置凭据'}
             </button>
+            <button onClick={startEdit} className="btn btn-sm btn-secondary">编辑</button>
             <button
               onClick={() => onDelete(provider.name, isActive)}
               className="btn btn-sm btn-danger"
